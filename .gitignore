@@ -1,0 +1,31 @@
+# Environment variables
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+
+# Firebase credentials
+firebase-service-account.json
+
+# Celery beat schedule
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+celerybeat.pid
+
+# Database
+*.sqlite3
+db.sqlite3
+
+
+# Virtual environments
+venv/
+.venv/
+
+.idea/
+
