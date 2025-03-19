@@ -35,9 +35,7 @@ A comprehensive task management and reminder application with multi-channel noti
   - Web application with responsive design
   - Push notifications on desktop and mobile browsers
   - Support for multiple devices per user
-
-![Reminder Details](./screenshots/reminder_details.png)
-*Screenshot: Detailed view of a reminder with subtasks*
+*
 
 ## Technology Stack
 
@@ -208,15 +206,6 @@ reminder_app/
 - **Signals**: Automatically trigger actions when models are saved/deleted
 - **Notification Service**: Core logic for scheduling and sending notifications
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## License
 
