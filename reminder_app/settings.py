@@ -202,10 +202,7 @@ CELERY_BEAT_SCHEDULE = {
 
 # Firebase Configuration
 FIREBASE_SETTINGS = {
-    'SERVICE_ACCOUNT_KEY_PATH': env(
-        'FIREBASE_SERVICE_ACCOUNT_PATH', 
-        os.path.join(BASE_DIR, 'firebase-service-account.json')
-    ),
+    'SERVICE_ACCOUNT_KEY_PATH': os.path.join(BASE_DIR, 'firebase-service-account.json'),
     
     'WEB_APP_CONFIG': {
         'apiKey': env('FIREBASE_API_KEY', ''),
