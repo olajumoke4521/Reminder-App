@@ -219,17 +219,3 @@ FIREBASE_SETTINGS = {
     # VAPID Key for web push notifications
     'VAPID_KEY': env('FIREBASE_VAPID_KEY', '')
 }
-FIREBASE_SETTINGS = {
-    'SERVICE_ACCOUNT_KEY_PATH': os.path.join(BASE_DIR, 'firebase-service-account.json'),
-    
-    'WEB_APP_CONFIG': {
-       'apiKey': "AIzaSyC66LNInnetFgWPFJpZRgiY_uBCNfE5QLU",
-       'authDomain': "reminder-app-7d605.firebaseapp.com",
-       'projectId': "reminder-app-7d605",
-       'storageBucket': "reminder-app-7d605.firebasestorage.app",
-       'messagingSenderId': "228342815984",
-       'appId': "1:228342815984:web:d1483ccf6a5a952fe93635"
-    },
-
-    'VAPID_KEY': "BJswoykis1_vDjqIVOhVBlVESjinotWVnPXl25Gf9srIoT4zobN9BFeRy1thLfYhu-viQeRkGBOKDt6pqXmxJaM",  
-}                                                                    
