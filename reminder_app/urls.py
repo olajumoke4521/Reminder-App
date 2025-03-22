@@ -18,6 +18,8 @@ from django.contrib import admin
 from django.urls import path, include
 from reminders import views
 from reminders.views import firebase_messaging_sw
+from django.conf import settings
+from django.conf.urls.static import static
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -25,7 +27,10 @@ urlpatterns = [
     path('firebase-messaging-sw.js', firebase_messaging_sw, name='firebase-messaging-sw.js'),
     path('notifications/test/', views.notification_test_page, name='notification-test'),
     path('api/test-notification/', views.test_notification, name='test-notification'),
-   
+    path('accounts/', include('django.contrib.auth.urls')),  # Built-in auth views
 
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
    

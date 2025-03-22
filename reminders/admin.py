@@ -4,29 +4,66 @@ from django.urls import reverse
 from django.db.models import Count
 from .models import (
     Reminder, SubTask, Tag,
-    DeviceToken, Notification
+    DeviceToken, Notification, SharedReminder, UserProfile
 )
+from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import User
 
+class UserProfileInline(admin.StackedInline):
+    model = UserProfile
+    can_delete = False
+    verbose_name_plural = 'User Profile'
+    fk_name = 'user'
 
+class CustomUserAdmin(UserAdmin):
+    inlines = [UserProfileInline]
+    list_display = ('username', 'email', 'first_name', 'last_name', 'is_staff', 'is_active', 'get_timezone')
+    list_filter = UserAdmin.list_filter + ('userprofile__timezone',)
+    search_fields = UserAdmin.search_fields
+    
+    def get_timezone(self, obj):
+        try:
+            return obj.userprofile.timezone
+        except UserProfile.DoesNotExist:
+            return 'UTC'
+    get_timezone.short_description = 'Timezone'
+    
+    def get_inline_instances(self, request, obj=None):
+        if not obj:
+            return []
+        return super().get_inline_instances(request, obj)
+
+# Unregister the default User admin and register our custom one
+admin.site.unregister(User)
+admin.site.register(User, CustomUserAdmin)
+
+# Reminder and related models
 class SubTaskInline(admin.TabularInline):
     model = SubTask
     extra = 1
     fields = ('title', 'is_completed', 'priority', 'date', 'time', 'is_flagged')
     show_change_link = True
 
+class SharedReminderInline(admin.TabularInline):
+    model = SharedReminder
+    extra = 1
+    fields = ('shared_with', 'permissions')
+    readonly_fields = ('shared_by', 'created_at')
+    fk_name = 'reminder'
+
 
 @admin.register(Reminder)
 class ReminderAdmin(admin.ModelAdmin):
     list_display = (
         'title', 'date', 'time', 'priority_badge', 'is_completed', 
-        'is_flagged', 'user', 'tag_list', 'subtasks_count'
+        'is_flagged', 'user', 'tag_list', 'subtasks_count', 'has_image'
     )
     list_filter = ('is_completed', 'is_flagged', 'priority', 'repeat', 'date')
     search_fields = ('title', 'description', 'location')
     date_hierarchy = 'date'
-    readonly_fields = ('created_at', 'updated_at', 'completed_at')
+    readonly_fields = ('created_at', 'updated_at', 'completed_at', 'image_preview')
     filter_horizontal = ('tags',)
-    inlines = [SubTaskInline]
+    inlines = [SubTaskInline, SharedReminderInline]
     
     fieldsets = (
         ('Basic Information', {
@@ -36,13 +73,16 @@ class ReminderAdmin(admin.ModelAdmin):
             'fields': ('date', 'time', 'is_all_day')
         }),
         ('Notification', {
-            'fields': ('early_reminder', 'custom_early_reminder')
+            'fields': ('early_reminder', 'custom_early_reminder', 'notification_preference')
         }),
         ('Recurring', {
             'fields': ('repeat', 'repeat_end_date', 'custom_repeat_interval')
         }),
         ('Status', {
             'fields': ('is_completed', 'completed_at', 'is_flagged', 'priority')
+        }),
+        ('Image', {
+            'fields': ('image', 'image_preview'),
         }),
         ('Additional Information', {
             'fields': ('tags',)
@@ -53,6 +93,18 @@ class ReminderAdmin(admin.ModelAdmin):
         }),
     )
     
+    def image_preview(self, obj):
+        if obj.image:
+            return format_html('<img src="{}" width="300" height="auto" />', obj.image.url)
+        return "No image"
+    image_preview.short_description = 'Image Preview'
+    
+    def has_image(self, obj):
+        if obj.image:
+            return format_html('<span style="color: green;">✓</span>')
+        return format_html('<span style="color: red;">✗</span>')
+    has_image.short_description = 'Image'
+
     def priority_badge(self, obj):
         colors = {
             'none': '#808080',  
@@ -282,3 +334,13 @@ class NotificationAdmin(admin.ModelAdmin):
         url = reverse('admin:reminders_reminder_change', args=[obj.reminder.id])
         return format_html('<a href="{}">{}</a>', url, obj.reminder.title)
     reminder_link.short_description = 'Reminder'
+
+@admin.register(SharedReminder)
+class SharedReminderAdmin(admin.ModelAdmin):
+    list_display = ('reminder', 'shared_with', 'shared_by', 'permissions', 'created_at')
+    list_filter = ('permissions', 'created_at')
+    search_fields = ('reminder__title', 'shared_with__username', 'shared_by__username')
+    readonly_fields = ('created_at',)
+    
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('reminder', 'shared_with', 'shared_by')

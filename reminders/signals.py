@@ -1,7 +1,8 @@
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from .models import Reminder, SubTask
+from .models import Reminder, SubTask, UserProfile
 from .notification_service import NotificationService
+from django.contrib.auth.models import User
 
 
 @receiver(post_save, sender=Reminder)
@@ -34,3 +35,14 @@ def subtask_deleted(sender, instance, **kwargs):
     # Delete all notifications for this subtask
     from .models import Notification
     Notification.objects.filter(subtask=instance).delete()
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    """Create a UserProfile for each new User."""
+    if created:
+        UserProfile.objects.get_or_create(user=instance)
+
+@receiver(post_save, sender=User)
+def save_user_profile(sender, instance, **kwargs):
+    """Save the UserProfile when the User is saved."""
+    UserProfile.objects.get_or_create(user=instance)

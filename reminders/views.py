@@ -1,4 +1,4 @@
-from rest_framework import viewsets, filters, status, serializers
+from rest_framework import viewsets, filters, status, serializers, generics, permissions
 from rest_framework.decorators import action,  api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -6,11 +6,11 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.db.models import Q
 from .models import (
-    Reminder, SubTask, Tag, DeviceToken, Notification
+    Reminder, SubTask, Tag, DeviceToken, Notification, SharedReminder
 )
 from .serializers import (
     ReminderSerializer, SubTaskSerializer, TagSerializer,
-    DeviceTokenSerializer, NotificationSerializer, SubTaskCreateSerializer
+    DeviceTokenSerializer, NotificationSerializer, SubTaskCreateSerializer, UserSerializer, UserRegistrationSerializer, SharedReminderSerializer
 )
 from django.http import HttpResponse
 from django.template import Template, Context
@@ -20,8 +20,73 @@ import os
 from django.shortcuts import render
 from firebase_admin import messaging
 import time
-import traceback
+import traceback 
+from django.contrib.auth.models import User
+from rest_framework_simplejwt.views import TokenObtainPairView
+from django.contrib.auth import logout
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
+
+class UserViewSet(viewsets.ModelViewSet):
+    """
+    API endpoint that allows users to be viewed or edited.
+    """
+    queryset = User.objects.all().order_by('-date_joined')
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        """
+        Filter users based on the current user.  For now, only return the
+        current user.
+        """
+        if self.action == 'list':
+            return User.objects.filter(pk=self.request.user.id)
+        return User.objects.all().order_by('-date_joined')
+
+    @action(detail=False, methods=['get'], url_path='me')
+    def get_current_user(self, request):
+        """
+        Get the current user's information.
+        """
+        serializer = self.get_serializer(request.user)
+        return Response(serializer.data)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+
+class UserRegistrationView(generics.CreateAPIView):
+    """
+    API endpoint for user registration.
+    """
+    queryset = User.objects.all()
+    serializer_class = UserRegistrationSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        response_serializer = UserSerializer(user, context={'request': request})
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+class LoginView(TokenObtainPairView):
+    pass
+
+class LogoutView(generics.GenericAPIView):
+    permission_classes = (IsAuthenticated,)
+    
+    def post(self, request, *args, **kwargs):
+        logout(request)
+        return Response({'detail': 'Successfully logged out.'})
+    
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated]
@@ -46,7 +111,6 @@ class TagViewSet(viewsets.ModelViewSet):
                 'total_usage': tag.reminders.count() + tag.subtasks.count()
             })
         
-        # Sort by total usage by default
         result = sorted(result, key=lambda x: x['total_usage'], reverse=True)
         
         return Response(result)
@@ -83,13 +147,15 @@ class TagViewSet(viewsets.ModelViewSet):
 class ReminderViewSet(viewsets.ModelViewSet):
     serializer_class = ReminderSerializer
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser] 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['is_completed', 'is_flagged', 'priority', 'tags']
     search_fields = ['title', 'description']
     ordering_fields = ['date', 'time', 'created_at', 'priority', 'title']
     
     def get_queryset(self):
-        queryset = Reminder.objects.filter(user=self.request.user)
+        user = self.request.user
+        queryset = Reminder.objects.filter(models.Q(user=user) | models.Q(sharedreminder__shared_with=user)).distinct().order_by('-created_at')
         
         # Filter by specific date
         date = self.request.query_params.get('date')
@@ -265,6 +331,98 @@ class ReminderViewSet(viewsets.ModelViewSet):
             )
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'], url_path='upload-image', parser_classes=[MultiPartParser, FormParser])
+    def upload_image(self, request, pk=None):
+        """Upload an image to this reminder."""
+        reminder = self.get_object()
+        
+        if 'image' not in request.FILES:
+            return Response(
+                {"detail": "No image provided"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        image = request.FILES['image']
+        
+        reminder.image = image
+        reminder.save()
+        
+        serializer = self.get_serializer(reminder)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['delete'], url_path='remove-image')
+    def remove_image(self, request, pk=None):
+        """Remove the image from this reminder."""
+        reminder = self.get_object()
+        
+        if reminder.image:
+            # Delete the image file from storage
+            if reminder.image.storage.exists(reminder.image.name):
+                reminder.image.storage.delete(reminder.image.name)
+            
+            reminder.image = None
+            reminder.save()
+            
+            return Response({"detail": "Image removed successfully"}, status=status.HTTP_204_NO_CONTENT)
+        else:
+            return Response({"detail": "No image to remove"}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=True, methods=['post'], url_path='share')
+    def share(self, request, pk=None):
+        reminder = self.get_object()
+        
+        # Make sure we have shared_with in the request data
+        if 'shared_with' not in request.data:
+            return Response(
+                {"detail": "User to share with is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Create a new SharedReminder directly
+            shared_reminder = SharedReminder(
+                reminder=reminder,
+                shared_with_id=request.data.get('shared_with'),
+                permissions=request.data.get('permissions', 'view'),
+                shared_by=request.user
+            )
+            
+            # Perform our own validation
+            if shared_reminder.shared_with == request.user:
+                return Response(
+                    {"detail": "You cannot share a reminder with yourself."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
+            # Check if already shared
+            if SharedReminder.objects.filter(
+                reminder=reminder, 
+                shared_with_id=request.data.get('shared_with')
+            ).exists():
+                return Response(
+                    {"detail": "This reminder has already been shared with this user."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
+            # Save the shared reminder
+            shared_reminder.save()
+            
+            # Return the serialized data
+            serializer = SharedReminderSerializer(shared_reminder, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except User.DoesNotExist:
+            return Response(
+                {"detail": "User to share with does not exist."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
@@ -513,3 +671,46 @@ def test_notification(request):
             'status': False,
             'error': f'Error sending notification: {error_message}'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+class SharedReminderViewSet(viewsets.ModelViewSet):
+    serializer_class = SharedReminderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    queryset = SharedReminder.objects.all()
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = SharedReminder.objects.filter(models.Q(shared_by=user) | models.Q(shared_with=user))
+        
+        # Filter by shared_with user
+        shared_with = self.request.query_params.get('shared_with')
+        if shared_with:
+            queryset = queryset.filter(shared_with=shared_with)
+        
+        # Filter by shared_by user
+        shared_by = self.request.query_params.get('shared_by')
+        if shared_by:
+            queryset = queryset.filter(shared_by=shared_by)
+            
+        # Filter by reminder
+        reminder = self.request.query_params.get('reminder')
+        if reminder:
+            queryset = queryset.filter(reminder=reminder)
+        
+        return queryset
+    
+    def create(self, request, *args, **kwargs):
+        # Make sure 'reminder' is provided in the request
+        if 'reminder' not in request.data:
+            return Response(
+                {"detail": "Reminder ID is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        return super().create(request, *args, **kwargs)
+        
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.shared_by != request.user and instance.shared_with != request.user:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)

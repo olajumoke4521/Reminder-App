@@ -1,6 +1,22 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
+from django.contrib.auth.models import AbstractUser
+from django.utils.translation import gettext_lazy as _
+import pytz
+from datetime import datetime
+
+class UserProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    timezone = models.CharField(
+        max_length=32,
+        choices=[(tz, tz) for tz in pytz.common_timezones],
+        default='UTC'
+    )
+
+    def __str__(self):
+        return self.user.username
+    
 
 class Tag(models.Model):
     name = models.CharField(max_length=50)
@@ -12,6 +28,11 @@ class Tag(models.Model):
     
 class Reminder(models.Model):
     
+    def reminder_image_path(instance, filename):
+        """Generate a unique path for each uploaded image."""
+        # Format: uploads/user_<id>/reminder_<id>/<filename>
+        return f'uploads/user_{instance.user.id}/reminder_{instance.id}/{filename}'
+     
     # Early Reminder Options
     EARLY_REMINDER_CHOICES = [
         ('none', 'None'),
@@ -66,12 +87,68 @@ class Reminder(models.Model):
     )
     location = models.CharField(max_length=255, blank=True, null=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="reminders")
+    image = models.ImageField(upload_to=reminder_image_path, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     def __str__(self):
         return self.title
-    
+
+    def get_local_scheduled_time(self, user):
+        """
+        Get the reminder's scheduled time in the user's local timezone.
+        If there's no date/time set, return None.
+        """
+
+        if not self.date:
+            return None
+        
+        if self.is_all_day or not self.time:
+            time_part = datetime.min.time()
+        else:
+            time_part = self.time
+        
+        utc_time = datetime.combine(self.date, time_part)
+        utc_time = pytz.UTC.localize(utc_time)
+        
+        try:
+            user_profile, created = UserProfile.objects.get_or_create(user=user, defaults={'timezone': 'UTC'})
+            user_timezone = pytz.timezone(user_profile.timezone)
+        except Exception:
+            user_timezone = pytz.UTC
+        
+        local_time = utc_time.astimezone(user_timezone)
+        return local_time
+
+    def set_local_scheduled_time(self, user, local_time):
+        """
+        Set the reminder's date and time fields based on the provided local time.
+        """    
+        try:
+            user_profile, created = UserProfile.objects.get_or_create(user=user, defaults={'timezone': 'UTC'})
+            user_timezone = pytz.timezone(user_profile.timezone)
+        except Exception:
+            user_timezone = pytz.UTC
+        
+        if isinstance(local_time, str):
+            try:
+                local_time = datetime.fromisoformat(local_time.replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                local_time = datetime.now()
+       
+        if local_time.tzinfo is None:
+            local_dt = user_timezone.localize(local_time, is_dst=None)
+        else:
+            local_dt = local_time
+        
+        utc_time = local_dt.astimezone(pytz.UTC)
+        
+        self.date = utc_time.date()
+        if not self.is_all_day:
+            self.time = utc_time.time()
+        else:
+            self.time = None
+
     def mark_as_completed(self):
         self.is_completed = True
         self.completed_at = timezone.now()
@@ -106,6 +183,22 @@ class SubTask(models.Model):
         self.completed_at = timezone.now
         self.save()
 
+class SharedReminder(models.Model):
+    reminder = models.ForeignKey(Reminder, on_delete=models.CASCADE)
+    shared_with = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shared_reminders')
+    permissions = models.CharField(
+        max_length=4,
+        choices=[('view', 'View'), ('edit', 'Edit')],
+        default='view'
+    )
+    shared_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shared_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('reminder', 'shared_with')
+
+    def __str__(self):
+        return f"Shared {self.reminder.title} with {self.shared_with.username} ({self.permissions})"
 
 class DeviceToken(models.Model):
     DEVICE_TYPES = [
